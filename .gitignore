@@ -1,0 +1,17 @@
+# Credentials -- never commit these
+.env
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Downloaded content and run-state (personal data, regenerable, and large)
+QuestionBanks/
+downloaded_manifest.json
+debug_screenshots/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
