@@ -2,3 +2,9 @@ selenium>=4.15.0
 webdriver-manager>=4.0.1
 python-dotenv>=1.0.0
 requests>=2.31.0
+
+# Added for the "Build Print Packs" feature (annual_portion_parser.py,
+# lesson_matcher.py, print_pack_builder.py, print_pack_gui.py):
+pdfplumber>=0.11.0   # reads the table structure out of the Annual Portion PDF
+pypdf>=4.0.0          # merges downloaded Question Bank PDFs into one print-ready file
+reportlab>=4.0.0      # draws the cover/summary page for each print pack

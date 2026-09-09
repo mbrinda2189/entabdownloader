@@ -62,3 +62,44 @@ it is and I can hard-code that selector so it stops asking.
   column.
 - Downloaded file type defaults to `.pdf` unless the server response
   indicates otherwise.
+
+## Building print-ready packs from an Annual Portion
+
+Every download run now also auto-fetches the school's **Annual Portion**
+document (found under Assignment type = "Exam Portions", the row titled
+"... ANNUAL PORTION ..."), saved as `_AnnualPortion.pdf` inside each
+child's folder. If the school hasn't posted one yet, this is skipped
+without affecting your Question Bank downloads.
+
+The **"Build print packs..."** button turns downloaded Question Banks
+into combined, print-ready PDFs grouped by subject and exam period (Unit
+Test I–IV, Semester I/II):
+
+1. **Child & annual portion** — mostly automatic. If you only have one
+   child, this step is just a confirmation; with more than one, you pick
+   from a dropdown. The auto-downloaded Annual Portion is used
+   automatically, with a manual upload option as a fallback.
+2. **Review the extracted syllabus** — PDF table extraction is never
+   perfect, so you get a chance to fix any lesson that got split oddly.
+   This is cached (keyed by the PDF's content) so re-running later on an
+   unchanged Annual Portion skips straight past this step.
+3. **Matching subjects to folders happens silently** — e.g. "MATHS" is
+   matched to a "MATHEMATICS" folder automatically. You only see a
+   screen for this if a subject is genuinely ambiguous (matches more
+   than one downloaded folder).
+4. **Six period buttons** — Unit Test I–IV, Semester I/II. Nothing is
+   computed until you click one. Clicking a period matches lessons to
+   downloaded PDFs for just that period, shows a quick confirm step only
+   if something's uncertain, then builds
+   `PrintPacks/<child>/<Subject>_<Period>.pdf` for every mapped subject.
+   Your choices for a period are remembered for the rest of the session,
+   so rebuilding it later (e.g. after downloading more Q.Bank PDFs)
+   won't re-ask about lessons you already sorted out.
+
+Each pack has a cover page listing what's included and, in red, what's
+missing. `PrintPacks/<child>/MissingLessons.txt` tracks missing lessons
+per period, updated independently each time you build that period.
+
+**Note:** Tamil and Hindi are intentionally skipped — those columns are
+set in a non-Unicode font in the school's PDF, so text extraction would
+produce scrambled text rather than real content.

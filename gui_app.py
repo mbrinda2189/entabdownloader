@@ -41,6 +41,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 
 import main as downloader  # the actual login/scrape/download logic
+from print_pack_gui import PrintPackWindow  # the "Build Print Packs" wizard window
 
 # ---------------------------------------------------------------------------
 # COLOR PALETTE -- pastel blue, white, and black text throughout.
@@ -218,6 +219,15 @@ class EntabDownloaderApp:
         )
         self.open_folder_button.pack(side="left", padx=(10, 0))
 
+        # "Build Print Packs" is independent of the download flow above --
+        # it works on question banks that have ALREADY been downloaded, so
+        # it's always clickable (not gated behind start_button's state).
+        self.print_pack_button = ttk.Button(
+            button_row, text="Build print packs...", style="Outline.TButton",
+            command=self._open_print_pack_window,
+        )
+        self.print_pack_button.pack(side="left", padx=(10, 0))
+
         # --- Progress log ---
         ttk.Label(outer, text="Progress log", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 6))
         log_container = tk.Frame(outer, bg=COLOR_PANEL, highlightbackground=COLOR_BORDER_LIGHT, highlightthickness=1)
@@ -337,6 +347,15 @@ class EntabDownloaderApp:
         folder = downloader.OUTPUT_ROOT.resolve()
         folder.mkdir(exist_ok=True)
         webbrowser.open(str(folder))
+
+    # -----------------------------------------------------------------
+    # "Build Print Packs" -- opens the separate wizard window that turns
+    # already-downloaded Question Bank PDFs into combined, print-ready
+    # packs grouped by subject + exam period, using the school's Annual
+    # Portion PDF. See print_pack_gui.py for the full step-by-step flow.
+    # -----------------------------------------------------------------
+    def _open_print_pack_window(self):
+        PrintPackWindow(self.root)
 
 
 def main():

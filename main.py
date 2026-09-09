@@ -46,6 +46,7 @@ import sys
 import json
 import time
 import argparse
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -92,6 +93,14 @@ DEFAULT_ASSIGNMENTS_URL = "https://entab.online/ParentPortal/ParentAssignment"
 # File that remembers what's already been downloaded, so re-runs skip them.
 MANIFEST_PATH = Path("downloaded_manifest.json")
 
+# Fixed filename (extension is added automatically based on what the
+# server actually returns) that the Annual Portion document is always
+# saved as -- see download_annual_portion(). Using the SAME name every
+# time means each run's download simply overwrites the previous one, so
+# whatever's on disk is always the version the school most recently
+# posted, with no extra bookkeeping needed.
+ANNUAL_PORTION_BASENAME = "_AnnualPortion"
+
 # How long (seconds) to wait for slow page elements before giving up and
 # asking the human for help.
 WAIT_TIMEOUT = 15
@@ -129,19 +138,49 @@ def save_manifest(manifest: dict) -> None:
 
 def already_downloaded(manifest: dict, subject: str, title: str) -> bool:
     """
-    Check both the manifest AND the actual filesystem (in case the manifest
-    was deleted but files remain) so we never re-download unnecessarily.
+    Check both the manifest AND the actual filesystem before concluding
+    something's already downloaded -- and, critically, still check the
+    filesystem even when the manifest already has an entry, not just as
+    a fallback when it doesn't.
+
+    Why this matters: a manifest entry on its own only proves a file
+    was downloaded at SOME point in the past, not that it's still on
+    disk right now. If the QuestionBanks folder is ever recreated,
+    moved, or has files manually cleaned up while the manifest file
+    (which lives at the project root, not inside the child's folder)
+    survives untouched, trusting the manifest alone would report those
+    files as "already downloaded" forever -- silently skipping them on
+    every future run even though nothing is actually there. That's
+    confirmed to have happened in practice (Chemistry and Physics both
+    showing as SKIP in a run's log while their folders didn't exist).
     """
     key = f"{subject}::{title}"
-    if key in manifest:
-        return True
     subject_folder = OUTPUT_ROOT / sanitize_filename(subject)
-    if subject_folder.exists():
-        safe_title = sanitize_filename(title)
-        for existing_file in subject_folder.iterdir():
-            if existing_file.stem.startswith(safe_title[:60]):
-                return True
-    return False
+    safe_title = sanitize_filename(title)
+
+    def file_actually_exists() -> bool:
+        if not subject_folder.exists():
+            return False
+        return any(existing.stem.startswith(safe_title[:60]) for existing in subject_folder.iterdir())
+
+    if key in manifest:
+        entry = manifest[key]
+        if isinstance(entry, dict) and entry.get("no_attachment"):
+            # Nothing was ever supposed to exist on disk for this one
+            # (the assignment genuinely has no attached file) -- there's
+            # nothing to verify, so the manifest alone is enough.
+            return True
+        if file_actually_exists():
+            return True
+        # The manifest remembers this as downloaded, but the file it
+        # points to isn't on disk any more -- don't trust a stale
+        # record. Fall through and let the caller re-download it (which
+        # will overwrite this manifest entry with a fresh, accurate one).
+        print(f"[diagnostic] Manifest says '{subject}::{title}' was already downloaded, "
+              f"but the file isn't on disk any more -- re-downloading it.")
+        return False
+
+    return file_actually_exists()
 
 
 # Pluggable "wait for the human to confirm" function. Defaults to a plain
@@ -840,6 +879,202 @@ def go_to_next_page(driver: webdriver.Chrome) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# ANNUAL PORTION DOCUMENT (auto-download)
+# ---------------------------------------------------------------------------
+#
+# The school posts the combined "Annual Portion" document under a
+# DIFFERENT Assignment Type than Question Banks: "Exam Portions" instead
+# of "Q.Bank", with Subject Name = "ALL SUBJECT" and a title like
+# "CL 6 - ANNUAL PORTION 2026-27" (confirmed by inspecting the portal
+# directly). The functions below reuse the same login/navigate/pagination
+# machinery as the Q.Bank flow above, just pointed at that different grid.
+#
+# NOTE ON TESTING: everything above this point in the file was validated
+# against the live portal. The functions in this section could NOT be
+# tested the same way (no portal access outside your own login), so
+# they're written to the same patterns as the proven Q.Bank code and to
+# be as forgiving as possible if the "Exam Portions" grid/modal behaves
+# slightly differently than expected -- see the try/except wrapping
+# download_annual_portion() below. If it doesn't work on the first real
+# run, share the terminal output the same way you have for everything
+# else and it can be adjusted quickly.
+
+def set_filters_for_exam_portions(driver: webdriver.Chrome, from_date: str, to_date: str) -> None:
+    """
+    Same idea as set_filters(), but selects 'Exam Portions' in the
+    Assignment Type dropdown instead of 'Q.Bank' -- this is where the
+    Annual Portion document lives. Subject is left blank, same as the
+    Q.Bank flow (Exam Portions rows are always "ALL SUBJECT" anyway).
+    """
+    ok_from = set_date_field(driver, "FromDate", from_date)
+    ok_to = set_date_field(driver, "ToDate", to_date)
+    ok_type = select_syncfusion_dropdown(driver, "Assignmenttype", "exam portions")
+
+    if not (ok_from and ok_to):
+        pause_for_manual_step(
+            f"(Annual Portion lookup) Please manually set 'From Date' to {from_date} and\n"
+            f"'To Date' to {to_date} in the filter bar."
+        )
+    if not ok_type:
+        pause_for_manual_step(
+            "(Annual Portion lookup) Please manually set 'Assignment type' to\n"
+            "'Exam Portions' in the filter bar -- this is where the school posts the\n"
+            "Annual Portion document."
+        )
+
+
+def scrape_exam_portion_rows(driver: webdriver.Chrome) -> list:
+    """
+    Like scrape_rows(), but for the 'Exam Portions' grid: also captures
+    the Assignment Date column (needed to pick the MOST RECENTLY posted
+    Annual Portion if the school has posted more than one over the
+    year), and doesn't look at Subject Name (Exam Portions rows are
+    always "ALL SUBJECT", so it's not useful for filtering here).
+
+    Deliberately kept as its OWN function rather than folded into
+    scrape_rows() -- scrape_rows() is the already-proven, hard-won Q.Bank
+    scraping logic (confirmed working with 0 failures across full
+    pagination), and this feature should never risk regressing it. If
+    the Exam Portions grid's layout turns out to need adjustment, only
+    this function is affected.
+    """
+    wait = WebDriverWait(driver, WAIT_TIMEOUT)
+    try:
+        header_table = wait.until(EC.presence_of_element_located((By.XPATH, "//table[.//th[contains(.,'Title')]]")))
+    except TimeoutException:
+        # No table at all -- the caller treats "nothing found" as normal
+        # (the school may simply not have posted anything here), so just
+        # return an empty list rather than pausing for a manual step.
+        print("[annual portion] No results table found on the Exam Portions page.")
+        return []
+
+    headers = [th.text.strip().lower() for th in header_table.find_elements(By.TAG_NAME, "th")]
+
+    def col_index(name_fragment: str, default: int) -> int:
+        for i, h in enumerate(headers):
+            if name_fragment in h:
+                return i
+        return default
+
+    title_idx = col_index("title", 1)
+    date_idx = col_index("assignment", 2)  # matches the "Assignment Date" header
+    view_idx = col_index("view", len(headers) - 1)
+
+    # Same Syncfusion split-table handling as scrape_rows(): header and
+    # data rows can be two separate <table> elements.
+    content_table = header_table
+    best_row_count = len(header_table.find_elements(By.CSS_SELECTOR, "tbody tr"))
+    try:
+        candidate = driver.find_element(By.CSS_SELECTOR, ".e-gridcontent table, .e-content table")
+        row_count = len(candidate.find_elements(By.CSS_SELECTOR, "tbody tr"))
+        if row_count > best_row_count:
+            content_table = candidate
+            best_row_count = row_count
+    except NoSuchElementException:
+        pass
+
+    rows = content_table.find_elements(By.CSS_SELECTOR, "tbody tr")
+    results = []
+    for row in rows:
+        cells = row.find_elements(By.TAG_NAME, "td")
+        if len(cells) <= max(title_idx, date_idx, view_idx):
+            continue  # malformed / header-ish row
+        title = cells[title_idx].text.strip()
+        assignment_date = cells[date_idx].text.strip()
+        if not title:
+            continue
+        try:
+            view_icon = cells[view_idx].find_element(By.CSS_SELECTOR, "i.fa-eye, [onclick*='modalOpen']")
+        except NoSuchElementException:
+            view_icon = cells[view_idx]
+        results.append({"title": title, "assignment_date": assignment_date, "view_cell": view_icon})
+    return results
+
+
+def download_annual_portion(driver: webdriver.Chrome, assignments_url: str,
+                             from_date: str, to_date: str):
+    """
+    Best-effort fetch of the school's Annual Portion document for
+    whichever child is CURRENTLY active in the browser (same assumption
+    as download_for_current_context: login / sibling-switching already
+    done). Looks under the 'Exam Portions' assignment type for a row
+    whose title contains 'ANNUAL PORTION', and downloads the most
+    recently posted one if there's more than one on record for the year.
+
+    Always saves to the SAME fixed filename (ANNUAL_PORTION_BASENAME)
+    inside the current OUTPUT_ROOT, overwriting whatever was there
+    before. This is what makes "the print pack tool always uses the
+    latest annual portion" work automatically with no extra bookkeeping:
+    every download run simply replaces the old copy with the newest one
+    the school has posted.
+
+    INTENTIONALLY FORGIVING: if nothing is found, or anything goes
+    wrong, this prints a note and returns None rather than raising -- a
+    missing or failed Annual Portion should never interrupt the actual
+    Question Bank download, which is the main point of a normal run.
+    Wrapped in a broad try/except for exactly that reason.
+
+    Returns the saved Path, or None.
+    """
+    print("\n[annual portion] Looking for the Annual Portion document (Exam Portions)...")
+    try:
+        navigate_to_assignments(driver, assignments_url=assignments_url)
+        set_filters_for_exam_portions(driver, from_date, to_date)
+
+        print("[annual portion] Waiting for grid data to load...")
+        for _ in range(15):
+            row_counts = [len(t.find_elements(By.CSS_SELECTOR, "tbody tr")) for t in driver.find_elements(By.TAG_NAME, "table")]
+            if any(c > 1 for c in row_counts):
+                break
+            time.sleep(1)
+
+        scroll_grid_to_load_all_rows(driver)
+
+        candidates = []  # (parsed_date_or_None, row_dict)
+        while True:
+            rows = scrape_exam_portion_rows(driver)
+            for row in rows:
+                if "annual portion" in row["title"].lower():
+                    parsed_date = None
+                    try:
+                        parsed_date = datetime.strptime(row["assignment_date"], "%d/%m/%Y")
+                    except ValueError:
+                        pass  # unparseable date -- still a candidate, just sorts last
+                    candidates.append((parsed_date, row))
+            if not go_to_next_page(driver):
+                break
+
+        if not candidates:
+            print("[annual portion] No 'Annual Portion' document found under Exam Portions "
+                  "-- skipping (the school may not have posted one yet). You can still "
+                  "upload one manually in the print pack tool.")
+            return None
+
+        # Most recently posted first; a row with no parseable date sorts last
+        # rather than crashing the comparison.
+        candidates.sort(key=lambda pair: pair[0] or datetime.min, reverse=True)
+        _, best_row = candidates[0]
+        print(f"[annual portion] Found: '{best_row['title']}' "
+              f"(dated {best_row['assignment_date'] or 'unknown'}) -- downloading...")
+
+        dest_path = OUTPUT_ROOT / ANNUAL_PORTION_BASENAME
+        saved_paths, _ = download_all_attachments(
+            driver, best_row["view_cell"], dest_path, debug_label="annual_portion"
+        )
+        if saved_paths:
+            print(f"[annual portion] Saved to: {saved_paths[0]}")
+            return saved_paths[0]
+
+        print("[annual portion] Found the listing but couldn't download its attachment.")
+        return None
+
+    except Exception as e:
+        print(f"[annual portion] Skipped due to an unexpected error (this does NOT affect "
+              f"your Question Bank downloads): {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # SIBLING SWITCHING
 # ---------------------------------------------------------------------------
 
@@ -991,6 +1226,14 @@ def download_for_current_context(driver: webdriver.Chrome, from_date: str, to_da
     print(f"Done. Downloaded: {summary['downloaded']} | Skipped (already had): {summary['skipped']} | "
           f"No attachment: {summary['no_attachment']} | Failed: {summary['failed']}")
     print(f"Files are organized under: {OUTPUT_ROOT.resolve()}")
+
+    # Also grab the Annual Portion document for this child, so the print
+    # pack tool always has an up-to-date one available without the parent
+    # needing to download/upload it by hand. Never lets a problem here
+    # affect the Q.Bank summary above -- see download_annual_portion()'s
+    # own try/except.
+    annual_portion_path = download_annual_portion(driver, assignments_url, from_date, to_date)
+    summary["annual_portion"] = str(annual_portion_path) if annual_portion_path else None
 
     return summary
 
