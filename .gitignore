@@ -11,6 +11,7 @@ QuestionBanks/
 downloaded_manifest.json
 downloaded_manifest_*.json
 debug_screenshots/
+PrintPacks/
 
 # PyInstaller build artifacts
 build/

@@ -1,16 +1,38 @@
 # Entab Question Bank Downloader
 
 Logs into an Entab-based school parent/student portal, finds all "Q.Bank"
-(question bank) assignment entries in a date range, downloads them, and
-sorts the files into folders by subject.
+(question bank) assignment entries in a date range, downloads them, sorts
+the files into folders by subject, and grabs the school's **Annual
+Portion** document too. A second tool, **Build Print Packs**, then
+combines those downloaded files into print-ready PDFs grouped by subject
+and exam period.
+
+**What it does, in short:**
+- Downloads every Question Bank PDF posted on the portal, sorted into
+  one folder per subject (per child, if you have more than one).
+- Auto-downloads the Annual Portion document alongside them.
+- Skips anything it's already downloaded on future runs.
+- Detects Question Banks the school's portal filed under the wrong
+  subject, and offers a one-click fix.
+- Combines everything into one print-ready PDF per subject per exam
+  period (Unit Test I–IV, Semester I/II), with a cover page showing
+  what's included and what's still missing.
 
 ```
 QuestionBanks/
-  ENGLISH/
-  MATHEMATICS/
-  SOCIAL SCIENCE/
-  ...
-downloaded_manifest.json   <- tracks what's already been downloaded
+  <Child Name> - <Class>/          <- one per child, if you have more than one
+    ENGLISH/
+    MATHEMATICS/
+    SOCIAL SCIENCE/
+    ...
+    _AnnualPortion.pdf             <- auto-downloaded every run, always the latest
+downloaded_manifest_<child>.json   <- tracks what's already been downloaded
+PrintPacks/
+  <Child Name> - <Class>/
+    ENGLISH_UNIT_TEST_-_I.pdf
+    ENGLISH_SEMESTER_-_I.pdf
+    ...
+    MissingLessons.txt            <- what's still missing, per period
 ```
 
 Re-running the script will **skip files it has already downloaded**.
@@ -103,3 +125,45 @@ per period, updated independently each time you build that period.
 **Note:** Tamil and Hindi are intentionally skipped — those columns are
 set in a non-Unicode font in the school's PDF, so text extraction would
 produce scrambled text rather than real content.
+
+### If a subject shows as "not yet downloaded" but you know it was posted
+
+This almost always means one of two things, both visible on the home
+screen of the Build Print Packs wizard:
+
+- **The school's portal filed it under the wrong subject.** Whoever
+  uploads a Q.Bank can leave the "Subject" dropdown on whatever it was
+  last set to, so e.g. a Physics chapter can get posted with Subject
+  Name = "Mathematics" — the downloader has no way to know the title
+  disagrees with that. If this has happened, the wizard's home screen
+  shows a warning listing the misfiled file(s) with a one-click **Move**
+  button per file.
+- **It just hasn't been downloaded yet for this child.** Re-run the
+  main downloader — it only fetches what the portal has posted as of
+  that run.
+
+If neither explains it, check the Assignment Date range you're
+downloading with (`FromDate`/`ToDate`), and check the portal itself
+(filter Assignment type = Q.Bank, Subject = the one in question) to
+confirm it's actually been posted.
+
+## Version history
+
+**v1.2.0**
+- Annual Portion document now downloads automatically alongside Question
+  Banks (Assignment type = "Exam Portions"), always kept as the latest
+  version posted.
+- New: Build Print Packs — combines downloaded Question Banks into one
+  print-ready PDF per subject per exam period, with a cover page and a
+  missing-lessons report.
+- New: detects Question Banks the portal filed under the wrong subject
+  and offers a one-click fix.
+- Fixed: a file whose folder was ever moved or cleaned up could get
+  silently skipped forever on later runs, because the "already
+  downloaded" check trusted its manifest record without confirming the
+  file was still actually there.
+
+**v1.0.0**
+- Initial release: logs in, downloads Question Bank PDFs for one or more
+  children (sibling switching supported), sorts them into per-subject
+  folders, and skips files already downloaded on re-runs.

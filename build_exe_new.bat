@@ -48,6 +48,12 @@ pyinstaller --onefile --windowed ^
     --collect-all certifi ^
     --collect-all charset_normalizer ^
     --collect-all idna ^
+    --collect-all pdfplumber ^
+    --collect-all pypdf ^
+    --collect-all reportlab ^
+    --collect-all pdfminer ^
+    --collect-all PIL ^
+    --collect-all pypdfium2 ^
     gui_app.py
 
 echo.
