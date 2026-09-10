@@ -45,12 +45,6 @@ Re-running the script will **skip files it has already downloaded**.
    ```
    pip install -r requirements.txt
    ```
-3. Copy `.env.example` to `.env` and fill in your real username/password:
-   ```
-   copy .env.example .env      (Windows)
-   cp .env.example .env        (Mac/Linux)
-   ```
-   **Never share your `.env` file or commit it to git.**
 
 ## Running it
 
